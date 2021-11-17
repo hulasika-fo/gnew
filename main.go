@@ -1,21 +1,21 @@
 package main
 
 import (
-	"os"
+	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"path"
-	"strings"
 	"runtime"
-	"errors"
+	"strings"
 )
 
 // 用于打印的颜色
-var cr0 = "\033[0m"	// 结束
-var cr1 = "\033[01;37m"	// 白色
-var cr2 = "\033[01;32m"	// 绿色
-var cr3 = "\033[01;33m"	// 黄色
-var cr4 = "\033[01;31m"	// 红色
+var cr0 = "\033[0m"     // 结束
+var cr1 = "\033[01;37m" // 白色
+var cr2 = "\033[01;32m" // 绿色
+var cr3 = "\033[01;33m" // 黄色
+var cr4 = "\033[01;31m" // 红色
 
 func main() {
 
@@ -38,7 +38,6 @@ func main() {
 	appName := args[0]
 	fmt.Println("Start to create project", cr3, appName, cr0, "...")
 
-
 	// 创建app路径
 	goPath, err := getFirstGoPath()
 	if err != nil {
@@ -50,9 +49,10 @@ func main() {
 		fmt.Println(cr4, "The project already exists!", cr0)
 		return
 	}
-	os.MkdirAll(appPath, 0755)
-	os.MkdirAll(path.Join(appPath, "routers"), 0755)
-	os.MkdirAll(path.Join(appPath, "controllers"), 0755)
+	_ = os.MkdirAll(appPath, 0755)
+	_ = os.MkdirAll(path.Join(appPath, "routers"), 0755)
+	_ = os.MkdirAll(path.Join(appPath, "controllers"), 0755)
+	_ = os.MkdirAll(path.Join(appPath, "conf"), 0755)
 
 	// 创建各个文件
 	Check(Write2File(path.Join(appPath, ".gitignore"), strings.Replace(strGitignore, "{{.AppName}}", appName, -1)))
@@ -60,6 +60,7 @@ func main() {
 	Check(Write2File(path.Join(appPath, "routers", "router.go"), strings.Replace(strRouter, "{{.AppName}}", appName, -1)))
 	Check(Write2File(path.Join(appPath, "controllers", "controller.go"), strings.Replace(strController, "{{.AppName}}", appName, -1)))
 	Check(Write2File(path.Join(appPath, "controllers", "example.go"), strings.Replace(strExample, "{{.AppName}}", appName, -1)))
+	Check(Write2File(path.Join(appPath, "conf", "config.go"), strings.Replace(strConfig, "{{.AppName}}", appName, -1)))
 
 	fmt.Println("Project", cr3, appName, cr0, cr2, "has been created successfully!", cr0)
 }
@@ -76,7 +77,9 @@ func Write2File(filename, content string) (err error) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func(f *os.File) {
+		_ = f.Close()
+	}(f)
 	_, err = f.WriteString(content)
 	fmt.Println(cr3, "-- Created: ", cr0, cr2, filename, cr0)
 	return
@@ -107,27 +110,25 @@ func getFirstGoPath() (goPath string, err error) {
 var strMain = `package main
 
 import (
+	"fmt"
 	"github.com/gorilla/mux"
+	"github.com/hulasika-fo/zlog/log"
+	"github.com/urfave/negroni"
 	"net/http"
 	"{{.AppName}}/routers"
-	"github.com/urfave/negroni"
-	"github.com/15125505/zlog/log"
+	"{{.AppName}}/conf"
 	_ "{{.AppName}}/controllers" // 这个是为了保证这个包被引入，否则不会调用init函数
 )
 
-func init() {
-	log.Log.SetLogFile("logs/{{.AppName}}")
-	log.Log.SetFileColor(true)
-	log.Log.SetAdditionalErrorFile(true)
-	log.Log.SetLogLevel(log.LevelDebug)
-}
-
 func main() {
+	conf.LoadConfig()
 	r := mux.NewRouter()
 	routers.CreateHandle(r)
 	n := negroni.New(negroni.NewRecovery(), negroni.NewStatic(http.Dir("public")), negroni.HandlerFunc(routers.PreProcess))
 	n.UseHandler(r)
-	n.Run(":5000")
+	log.Info("启动服务：:", conf.Cfg.ServerPort)
+	n.Run(fmt.Sprintf(":%v", conf.Cfg.ServerPort))
+	log.Info("停止服务：:")
 }
 `
 
@@ -141,7 +142,7 @@ import (
 	"sort"
 	"net/http"
 	"github.com/urfave/negroni"
-	"github.com/15125505/zlog/log"
+	"github.com/hulasika-fo/zlog/log"
 )
 
 // 子路由必须实现的接口
@@ -311,3 +312,67 @@ func relativePath(w http.ResponseWriter, r *http.Request) {
 var strGitignore = `.idea
 *.exe
 *.log`
+
+var strConfig = `
+package conf
+
+import (
+	"encoding/json"
+	"github.com/hulasika-fo/zlog/log"
+	"io/ioutil"
+)
+
+// ConfigType
+// @说明：配置结构
+type ConfigType struct {
+	ServerPort int    ` + "`" + `json:"serverPort"` + "`" + `
+	LogPath    string ` + "`" + `json:"logPath"` + "`" + `
+	LogLevel   int    ` + "`" + `json:"logLevel"` + "`" + `
+}
+
+// Cfg 配置
+var Cfg = &ConfigType{
+	ServerPort: 8080,
+	LogPath:    "logs/",
+	LogLevel:   log.LevelInformational,
+}
+
+// LoadConfig
+// @说明：加载配置文件
+// @备注：无
+func LoadConfig() {
+	defer func() {
+		b, err := json.Marshal(Cfg)
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		log.Info("当前配置：", string(b))
+	}()
+
+	// 从本地载入配置文件
+	cFile := "conf/config.json"
+	fileBytes, err := ioutil.ReadFile(cFile)
+	if err != nil {
+		log.Error("载入本地配置文件失败:", err.Error())
+		return
+	}
+
+	// 解析json数据
+	c := ConfigType{}
+	err = json.Unmarshal(fileBytes, &c)
+	if err != nil {
+		log.Error("解析配置json数据失败:", err.Error())
+		return
+	}
+	Cfg = &c
+
+	// 设置日志
+	log.Log.SetLogFile(Cfg.LogPath)
+	log.Log.SetFileColor(true)
+	log.Log.SetFileDaily(true)
+	log.Log.SetAdditionalErrorFile(true)
+	log.Log.SetLogLevel(log.LevelDebug)
+}
+
+`
