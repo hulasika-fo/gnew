@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -39,12 +40,8 @@ func main() {
 	fmt.Println("Start to create project", cr3, appName, cr0, "...")
 
 	// 创建app路径
-	goPath, err := getFirstGoPath()
-	if err != nil {
-		fmt.Println(cr4, "Get GOPATH failed:", err, cr0)
-		return
-	}
-	appPath := path.Join(goPath, "src", appName)
+	appPath, _ := filepath.Abs(".")
+	appPath = filepath.Join(appPath, appName)
 	if IsExist(appPath) {
 		fmt.Println(cr4, "The project already exists!", cr0)
 		return
